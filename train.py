@@ -19,6 +19,11 @@ from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
 from util.visualizer import Visualizer
+import torch
+from util.extraction import extract_patches, reconstruct_volume, circlemask_cropped
+import numpy as np
+input_shape = [32,256,256,1]
+IMG_STRIDE = 16
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()   # get training options
@@ -44,10 +49,35 @@ if __name__ == '__main__':
 
             total_iters += 1
             epoch_iter += 1
-            model.set_input(data)         # unpack data from dataset and apply preprocessing
-            model.optimize_parameters()   # calculate loss functions, get gradients, update network weights
 
-            if total_iters % opt.display_freq == 0:   # display images on visdom and save images to a HTML file
+            img = np.array(data['img']).squeeze()
+            edge = np.array(data['edge']).squeeze()
+            patches = extract_patches(img=img, patch_shape=input_shape[:3], extraction_step=[IMG_STRIDE, 1, 1])
+            edge_patches = extract_patches(img=edge, patch_shape=input_shape[:3], extraction_step=[IMG_STRIDE, 1, 1])
+            for l in range(patches.shape[0]-opt.batch_size+1):
+            # for l in range(1):
+                patch = patches[l:l+opt.batch_size, :]  # patch排序
+                edge_patch = edge_patches[l:l+opt.batch_size, :]
+                mask = circlemask_cropped(input_shape)
+                mask = np.expand_dims(mask, axis=[0, 1]).repeat(opt.batch_size, axis=0)
+                edge = np.expand_dims(edge_patch, axis=1)
+                patch = np.expand_dims(patch, axis=1)
+                target = patch
+                input_image = target.copy()
+                input_image[mask] = -1
+                input_image = torch.from_numpy(input_image.astype('float32'))
+                input_edge = torch.from_numpy(edge.astype('float32'))
+                input_mask = torch.from_numpy(mask.astype('float32'))
+                target = torch.from_numpy(target.astype('float32'))
+                data_patch = {'A': input_image, 'edge':input_edge, 'mask': input_mask,
+                              'B': target, 'A_paths': data['A_paths'], 'B_paths': data['A_paths']}
+
+                # model.set_input(data)         # unpack data from dataset and apply preprocessing
+                model.set_input(data_patch)         # unpack data from dataset and apply preprocessing
+                model.optimize_parameters()   # calculate loss functions, get gradients, update network weights
+
+            # if total_iters % opt.display_freq == 0:   # display images on visdom and save images to a HTML file
+            if total_iters % 1 == 0:   # display images on visdom and save images to a HTML file
                 save_result = total_iters % opt.update_html_freq == 0
                 model.compute_visuals()
                 visualizer.display_current_results(model.get_current_visuals(), epoch, save_result)
